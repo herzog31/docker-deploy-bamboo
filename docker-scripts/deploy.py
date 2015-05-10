@@ -7,18 +7,38 @@ import httplib
 import string
 
 # Arguments
-sshPort = 22
-testBaseFolder = "/home/iosintro/testing"
-sshUser = "iosintro"
-sshHost = "iosintro-bruegge.in.tum.de"
-sshPassword = "2XXRR3Py"
-testEnvName = "test_python"
-testComposeFile = "production.yml"
-testService = "node"
-testServiceStartUpTime = 1
-testServiceUrl = "/"
-testServiceVerb = "GET"
-testPrivatePort = 80
+# - from Bamboo environment
+
+# Mode
+# - "TEST" stops and removes containers first
+# - "DEPLOY" only renews containers
+testMode = os.getenv('bamboo_test_mode', "TEST")
+# SSH port
+sshPort = int(os.getenv('bamboo_test_sshport', 22))
+# Bamboo working directory
+testWorkingDirectory = os.getenv('bamboo_working_directory')
+# Test folder, where to deploy build artifacts
+testBaseFolder = os.getenv('bamboo_test_path')
+# SSH user
+sshUser = os.getenv('bamboo_test_user')
+# SSH host
+sshHost = os.getenv('bamboo_test_hostname')
+# SSH password
+sshPassword = os.getenv('bamboo_test_password')
+# Env name, e.g. test_14
+testEnvName = os.getenv('bamboo_test_envname', "test_"+os.environ.get('bamboo_buildNumber')) 
+# Compose file, e.g. production.yml
+testComposeFile = os.getenv('bamboo_test_composeFile')
+# Service to test, name from compose file, e.g. node
+testService = os.getenv('bamboo_test_service')
+# Service start up time in secs, wait before executing test
+testServiceStartUpTime = int(os.getenv('bamboo_test_serviceStartUpTime', 1))
+# Test URL, which URL to test
+testServiceUrl = os.getenv('bamboo_test_serviceUrl', "/")
+# Test Verb, which HTTP method used for testing
+testServiceVerb = os.getenv('bamboo_test_serviceVerb', "GET")
+# Test Port, private port to test
+testPrivatePort = os.getenv('bamboo_test_privatePort')
 
 # Private variables
 artifact = False
@@ -33,8 +53,8 @@ def indent(s):
     s = string.join(s, '\n')
     return s
 
-# Get artifact
-files = filter(os.path.isfile, os.listdir(os.curdir))
+# Get artifact, should be a zip file stored in the working folder
+files = filter(os.path.isfile, os.listdir(testWorkingDirectory))
 for f in files:
     if f.endswith(".zip"):
         artifact = (f, os.path.abspath(f))
@@ -44,6 +64,7 @@ if not artifact:
 
 # Perform SSH operations
 try:
+    # Connect to SSH host
     client = paramiko.SSHClient()
     client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
 
@@ -51,22 +72,26 @@ try:
     client.connect(sshHost, sshPort, sshUser, sshPassword)
 
     chan = client.invoke_shell()
+    chan.settimeout(30)
 
     channelLog = str()
     stage = 0
 
     while True:
+        # Read from SSH channel
         if chan.recv_ready():
             channelLog += chan.recv(1024)
         else:
             continue
 
+        # Enter password if asked
         if chan.send_ready() and "[sudo] password" in channelLog and channelLog.rstrip().endswith(":"):
             print(indent(channelLog))
             print("### Enter SUDO password ###")
             channelLog = ""
             chan.sendall(sshPassword + "\n")
 
+        # Go to working directory
         elif chan.send_ready() and channelLog.rstrip().endswith("~$") and stage == 0:
             print(indent(channelLog))
             print("### PREPARE: Enter testing env ###")
@@ -74,6 +99,7 @@ try:
             chan.sendall('cd '+testBaseFolder+'\n')
             stage += 1
 
+        # Create directoy (env name) to deploy to and go to it
         elif chan.send_ready() and channelLog.rstrip().endswith("/"+os.path.basename(testBaseFolder)+"$") and stage == 1:
             print(indent(channelLog))
             print("### PREPARE: Create and cd to working directory ###")
@@ -82,6 +108,7 @@ try:
             chan.sendall('cd '+testEnvName+'\n')
             stage += 1
 
+        # Clean working directory
         elif chan.send_ready() and channelLog.rstrip().endswith("/"+testEnvName+"$") and stage == 2:
             print(indent(channelLog))
             print("### PREPARE: Clean working directory ###")
@@ -89,6 +116,7 @@ try:
             chan.sendall('rm -rf *\n')
             stage += 1
 
+        # Get absolute path
         elif chan.send_ready() and channelLog.rstrip().endswith("/"+testEnvName+"$") and stage == 3:
             print(indent(channelLog))
             print("### PREPARE: Get absolute target path ###")
@@ -96,6 +124,7 @@ try:
             chan.sendall('pwd\n')
             stage += 1
 
+        # Parse absolute path
         elif chan.send_ready() and channelLog.rstrip().endswith("/"+testEnvName+"$") and stage == 4:
             print(indent(channelLog))
             print("### PREPARE: Parse absolute target path ###")
@@ -108,6 +137,7 @@ try:
                     channelLog = ""
                     break    
 
+        # Copy artifact to remote host
         elif chan.send_ready() and channelLog.rstrip().endswith("/"+testEnvName+"$") and stage == 5:
             print(indent(channelLog))
             print("### COPY: Copy artifact ###")
@@ -118,6 +148,7 @@ try:
             chan.sendall("ls -As\n")
             stage += 1
 
+        # Unzip artifact
         elif chan.send_ready() and channelLog.rstrip().endswith("/"+testEnvName+"$") and stage == 6:
             print(indent(channelLog))
             print("### COPY: Unzip artifact ###")
@@ -125,6 +156,7 @@ try:
             chan.sendall("unzip *.zip\n")
             stage += 1
 
+        # Remove artifact zip
         elif chan.send_ready() and channelLog.rstrip().endswith("/"+testEnvName+"$") and stage == 7:
             print(indent(channelLog))
             print("### COPY: Remove artifact ###")
@@ -132,20 +164,29 @@ try:
             chan.sendall("rm *.zip\n")
             stage += 1
 
+        # Stop existing containers with same env name
         elif chan.send_ready() and channelLog.rstrip().endswith("/"+testEnvName+"$") and stage == 8:
-            print(indent(channelLog))
-            print("### RUN: Stop existing composition ###")
-            channelLog = ""
-            chan.sendall("sudo docker-compose -f "+testComposeFile+" -p="+testEnvName+" stop\n")
+            if testMode == "TEST":
+                print(indent(channelLog))
+                print("### RUN: Stop existing composition ###")
+                channelLog = ""
+                chan.sendall("sudo docker-compose -f "+testComposeFile+" -p="+testEnvName+" stop\n")
+            else:
+                chan.sendall("\n")
             stage += 1
 
+        # Remove existing containers with same env name
         elif chan.send_ready() and channelLog.rstrip().endswith("/"+testEnvName+"$") and stage == 9:
-            print(indent(channelLog))
-            print("### RUN: Remove existing composition ###")
-            channelLog = ""
-            chan.sendall("sudo docker-compose -f "+testComposeFile+" -p="+testEnvName+" rm -v --force\n")
+            if testMode == "TEST":
+                print(indent(channelLog))
+                print("### RUN: Remove existing composition ###")
+                channelLog = ""
+                chan.sendall("sudo docker-compose -f "+testComposeFile+" -p="+testEnvName+" rm -v --force\n")
+            else:
+                chan.sendall("\n")
             stage += 1
 
+        # Build container composition
         elif chan.send_ready() and channelLog.rstrip().endswith("/"+testEnvName+"$") and stage == 10:
             print(indent(channelLog))
             print("### RUN: Rebuild composition ###")
@@ -153,13 +194,15 @@ try:
             chan.sendall("sudo docker-compose -f "+testComposeFile+" -p="+testEnvName+" build\n")
             stage += 1
 
-        elif chan.send_ready() and channelLog.rstrip().endswith("/"+testEnvName+"$") and stage == 11:
+        # Run container composition
+        elif chan.send_ready() and channelLog.rstrip().endswith("/"+testEnvName+"$") and ("skipping" in channelLog or "Successfully built" in channelLog) and stage == 11:
             print(indent(channelLog))
             print("### RUN: Run composition ###")
             channelLog = ""
             chan.sendall("sudo docker-compose -f "+testComposeFile+" -p="+testEnvName+" up -d\n")
             stage += 1
 
+        # Get public port of service to test
         elif chan.send_ready() and channelLog.rstrip().endswith("/"+testEnvName+"$") and stage == 12:
             print(indent(channelLog))
             print("### TEST: Get public port ###")
@@ -167,9 +210,12 @@ try:
             chan.sendall("sudo docker-compose -f "+testComposeFile+" -p="+testEnvName+" port "+testService+" "+str(testPrivatePort)+"\n")
             stage += 1
 
+        # Parse public port
         elif chan.send_ready() and channelLog.rstrip().endswith("/"+testEnvName+"$") and stage == 13:
             print(indent(channelLog))
             print("### TEST: Parse public port ###")
+            if "No container found" in channelLog:
+                raise Exception('Service to test not running!')
             for line in channelLog.split("\n"):
                 line = line.lstrip().rstrip()
                 if "0.0.0.0:" in line:
@@ -180,6 +226,7 @@ try:
                     channelLog = ""
                     break   
 
+        # Make test HTTP request
         elif chan.send_ready() and channelLog.rstrip().endswith("/"+testEnvName+"$") and stage == 14:
             sleep(testServiceStartUpTime)
             print(indent(channelLog))
@@ -202,20 +249,29 @@ try:
             chan.sendall('\n')
             stage += 1
 
+        # Stop composition
         elif chan.send_ready() and channelLog.rstrip().endswith("/"+testEnvName+"$") and stage == 15:
-            print(indent(channelLog))
-            print("### CLEAN: Stop composition ###")
-            channelLog = ""
-            chan.sendall("sudo docker-compose -f "+testComposeFile+" -p="+testEnvName+" stop\n")
+            if testMode == "TEST":
+                print(indent(channelLog))
+                print("### CLEAN: Stop composition ###")
+                channelLog = ""
+                chan.sendall("sudo docker-compose -f "+testComposeFile+" -p="+testEnvName+" stop\n")
+            else:
+                chan.sendall("\n")
             stage += 1
 
+        # Remove composition
         elif chan.send_ready() and channelLog.rstrip().endswith("/"+testEnvName+"$") and stage == 16:
-            print(indent(channelLog))
-            print("### CLEAN: Remove composition ###")
-            channelLog = ""
-            chan.sendall("sudo docker-compose -f "+testComposeFile+" -p="+testEnvName+" rm -v --force\n")
+            if testMode == "TEST":
+                print(indent(channelLog))
+                print("### CLEAN: Remove composition ###")
+                channelLog = ""
+                chan.sendall("sudo docker-compose -f "+testComposeFile+" -p="+testEnvName+" rm -v --force\n")
+            else:
+                chan.sendall("\n")
             stage += 1
 
+        # Go back to testing folder
         elif chan.send_ready() and channelLog.rstrip().endswith("/"+testEnvName+"$") and stage == 17:
             print(indent(channelLog))
             print("### CLEAN: Enter testing env ###")
@@ -223,6 +279,7 @@ try:
             chan.sendall("cd "+testBaseFolder+"\n")
             stage += 1
 
+        # Remove deploy folder
         elif chan.send_ready() and channelLog.rstrip().endswith("/"+os.path.basename(testBaseFolder)+"$") and stage == 18:
             print(indent(channelLog))
             print("### CLEAN: Remove working directoy ###")
@@ -234,9 +291,11 @@ try:
             print(indent(channelLog))
             break
 
+    # Close connection
     chan.close()
     client.close()
 
+    # Exit depending on test results
     if success:
         sys.exit(0)
     else:
