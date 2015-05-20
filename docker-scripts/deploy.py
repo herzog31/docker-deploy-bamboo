@@ -22,52 +22,52 @@ import string
 # - "TEST" test composititon
 # - "REMOVE" remove composition
 # or any combination, e.g. DEPLOY,TEST
-testMode = os.getenv('bamboo_test_mode', "CLEAR,DEPLOY,TEST,REMOVE")
+testMode = os.getenv('bamboo_docker_mode', "CLEAR,DEPLOY,TEST,REMOVE")
 
 # SSH port
 # DEFAULT 22
-sshPort = int(os.getenv('bamboo_test_sshport', 22))
+sshPort = int(os.getenv('bamboo_docker_sshport', 22))
 
 # Bamboo working directory
 testWorkingDirectory = os.getenv('bamboo_working_directory')
 
 # Test folder, where to deploy build artifacts
-testBaseFolder = os.getenv('bamboo_test_path')
+testBaseFolder = os.getenv('bamboo_docker_path')
 
 # SSH user
-sshUser = os.getenv('bamboo_test_user')
+sshUser = os.getenv('bamboo_docker_user')
 
 # SSH host
-sshHost = os.getenv('bamboo_test_hostname')
+sshHost = os.getenv('bamboo_docker_hostname')
 
 # SSH password
-sshPassword = os.getenv('bamboo_test_password')
+sshPassword = os.getenv('bamboo_docker_password')
 
 # Env name, e.g. test_14
 # DEFAULT test_default
-testEnvName = os.getenv('bamboo_test_envname', "test_"+os.getenv('bamboo_buildNumber', 'default')) 
+testEnvName = os.getenv('bamboo_docker_env', "test_"+os.getenv('bamboo_buildNumber', 'default')) 
 
 # Compose file, e.g. production.yml
-testComposeFile = os.getenv('bamboo_test_composeFile')
+testComposeFile = os.getenv('bamboo_docker_composeFile')
 
 # Service to test, name from compose file, e.g. node
-testService = os.getenv('bamboo_test_service')
+testService = os.getenv('bamboo_docker_test_service')
 
 # Service start up time in secs, wait before executing test
 # DEFAULT 5
-testServiceStartUpTime = int(os.getenv('bamboo_test_serviceStartUpTime', 5))
+testServiceStartUpTime = int(os.getenv('bamboo_docker_test_timeout', 5))
 
 # Test URL, which URL to test
 # DEFAULT /
-testServiceUrl = os.getenv('bamboo_test_serviceUrl', "/")
+testServiceUrl = os.getenv('bamboo_docker_test_url', "/")
 
 # Test Verb, which HTTP method used for testing
 # DEFAULT GET
-testServiceVerb = os.getenv('bamboo_test_serviceVerb', "GET")
+testServiceVerb = os.getenv('bamboo_docker_test_verb', "GET")
 
 # Test Port, private port to test
 # DEFAULT 80
-testPrivatePort = os.getenv('bamboo_test_privatePort', '80')
+testPrivatePort = os.getenv('bamboo_docker_test_privatePort', '80')
 
 # Indent string helper
 def indent(s):
@@ -403,7 +403,7 @@ class DockerDeployClient():
                 conn.request(verb, url)
                 response = conn.getresponse()
                 if response.status == httplib.OK:
-                    print(indent("est was successful!"))
+                    print(indent("Test was successful!"))
                     return True
                 else:
                     print(indent("Test failed: Status "+str(response.status)+"!"))
@@ -498,10 +498,10 @@ try:
     client.unzipArtifact(artifact[0])
     print("### Delete Artifact ###")
     client.removeArtifact(artifact[0])
-    print("### Stop existing composition ###")
-    client.stopComposition(testComposeFile, testEnvName)
     # MODE CLEAR
     if "CLEAR" in testMode:
+        print("### Stop existing composition ###")
+        client.stopComposition(testComposeFile, testEnvName)
         print("### Remove existing composition ###")
         client.removeComposition(testComposeFile, testEnvName, True)
     # MODE DEPLOY
@@ -514,7 +514,7 @@ try:
     if "TEST" in testMode:
         print("### Get port mapping ###")
         publicPort = client.getPortMapping(testComposeFile, testEnvName, testService, testPrivatePort)
-        print("### Public port: " + str(publicPort))
+        print("#### Public port: " + str(publicPort))
         print("### Make HTTP request ###")
         success = client.makeHTTPRequest(sshHost, publicPort, testServiceVerb, testServiceUrl, testServiceStartUpTime)
     # MODE REMOVE
