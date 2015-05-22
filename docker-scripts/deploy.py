@@ -1,3 +1,5 @@
+#!/usr/bin/env python
+
 '''
 Docker Deploy Script
      for Bamboo     
