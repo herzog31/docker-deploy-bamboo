@@ -47,7 +47,7 @@ sshPassword = os.getenv('bamboo_docker_password')
 
 # Env name, e.g. test_14
 # DEFAULT test_default
-testEnvName = os.getenv('bamboo_deploy_environment', "test_"+os.getenv('bamboo_buildNumber', 'default')) 
+testEnvName = os.getenv('bamboo_deploy_environment', "test_"+os.getenv('bamboo_buildNumber', 'default')).lower()
 
 # Compose file, e.g. production.yml
 testComposeFile = os.getenv('bamboo_docker_composeFile')
